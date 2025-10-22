@@ -1,4 +1,4 @@
 
-BOT_TOKEN = "ВСТАВ_СВІЙ_ТОКЕН_СЮДИ"
-
+BOT_TOKEN = "8102838078:AAEa00_Q2KFgL00GbCLa6_bX65s0kOO4RlI"
+GEMINI_API_KEY = "AIzaSyCGxs5H5DDtCSdarXHFtr_nrFLyZSWtg6o"
 
