@@ -9,7 +9,7 @@ def generate_flashcards_from_text(lecture_text, GEMINI_API_KEY):
     """
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         print(f"Помилка конфігурації Gemini: {e}")
         return None
@@ -52,6 +52,8 @@ def generate_flashcards_from_text(lecture_text, GEMINI_API_KEY):
                 return None
 
         flashcards = json.loads(json_text)
+        print(json.dumps(flashcards, indent=2, ensure_ascii=False))
+
 
         if isinstance(flashcards, list) and all(isinstance(item, dict) for item in flashcards):
             return flashcards
