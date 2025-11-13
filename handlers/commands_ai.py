@@ -1,49 +1,96 @@
+# handlers/commands_ai.py
 from aiogram import Router, types
 from aiogram.filters import Command
-from config import GEMINI_API_KEY
-from ai.gemini_api import generate_flashcards_from_text
+from ai.gemini_api import generate_flashcards_from_text, regenerate_flashcards
 
 router = Router()
-user_states = {}
+
+# Локальна пам’ять користувача
+user_last_text = {}   # user_id -> lecture text
+
 
 @router.message(Command("generate"))
-async def handle_generate(message: types.Message):
-    user_states[message.chat.id] = "awaiting_lecture_text"
+async def cmd_generate(message: types.Message):
     await message.answer(
-        "🔥 Чудово! Тепер просто надішли мені текст лекції, "
-        "і я перетворю його на флеш-картки."
+        "🔥 Надішліть текст лекції — я згенерую флеш-картки."
     )
 
-@router.message(lambda msg: user_states.get(msg.chat.id) == "awaiting_lecture_text")
-async def receive_lecture_text(message: types.Message):
-    user_id = message.chat.id
+    # Зберігаємо стан
+    user_last_text[message.from_user.id] = "__waiting__"
+
+
+@router.message()
+async def receive_text(message: types.Message):
+    user_id = message.from_user.id
+
+    # Якщо користувач не викликав /generate
+    if user_last_text.get(user_id) != "__waiting__":
+        return
+
     lecture_text = message.text
+    user_last_text[user_id] = lecture_text  # зберігаємо оригінал
 
-    try:
-        wait_msg = await message.answer("Обробляю ваш текст... ⏳ Це може зайняти хвилину.")
-        user_states.pop(user_id, None)
+    wait = await message.answer("⏳ Генерую картки, зачекайте...")
 
-        flashcards = generate_flashcards_from_text(lecture_text, GEMINI_API_KEY)
+    cards = generate_flashcards_from_text(lecture_text)
 
-        await message.bot.delete_message(chat_id=user_id, message_id=wait_msg.message_id)
+    await wait.delete()
 
-        if flashcards and len(flashcards) > 0:
-            print(f"Симуляція: Збережено {len(flashcards)} карток для {user_id}.")
-            await message.answer(
-                f"✅ Готово! Згенеровано та збережено {len(flashcards)} флеш-карток.\n\n"
-                "Можете починати тестування."
-            )
-            first_card = flashcards[0]
-            await message.answer(
-                f"Приклад першої картки:\n\nПитання: {first_card['question']}\nВідповідь: {first_card['answer']}"
-            )
-        else:
-            await message.answer(
-                "❌ Не вдалося розпізнати текст або згенерувати картки. "
-                "Можливо, текст був занадто коротким або незрозумілим. Спробуйте ще раз."
-            )
+    if not cards:
+        return await message.answer("❌ Не вдалося згенерувати картки. Спробуйте інший текст.")
 
-    except Exception as e:
-        print(f"Критична помилка в receive_lecture_text: {e}")
-        user_states.pop(user_id, None)
-        await message.answer("❌ Ой, сталася неочікувана помилка під час генерації. Спробуйте ще раз.")
+    # Кнопка перегенерації
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔁 Перегенерувати тему", callback_data="regen")]
+        ]
+    )
+
+    await message.answer(
+        f"✅ Згенеровано {len(cards)} карток!",
+        reply_markup=keyboard
+    )
+
+    # Показати одну картку
+    q = cards[0]["question"]
+    a = cards[0]["answer"]
+
+    await message.answer(f"📘 *Приклад картки*\n\n❓ {q}\n✅ {a}", parse_mode="Markdown")
+
+
+# --- CALLBACK — перегенерація ---
+@router.callback_query(lambda c: c.data == "regen")
+async def regenerate_handler(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+
+    if user_id not in user_last_text:
+        return await callback.answer("Помилка: не знайдено текст.")
+
+    lecture_text = user_last_text[user_id]
+
+    await callback.answer("🔄 Генерую нову версію...")
+
+    new_cards = regenerate_flashcards(lecture_text)
+
+    if not new_cards:
+        return await callback.message.edit_text("❌ Помилка генерації. Спробуйте /generate.")
+
+    # Нова кнопка
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔁 Перегенерувати тему", callback_data="regen")]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"🔄 Оновлено! Нових карток: {len(new_cards)}",
+        reply_markup=keyboard
+    )
+
+    q = new_cards[0]["question"]
+    a = new_cards[0]["answer"]
+
+    await callback.message.answer(
+        f"📘 *Нова картка*\n\n❓ {q}\n✅ {a}",
+        parse_mode="Markdown"
+    )

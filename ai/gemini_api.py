@@ -1,71 +1,81 @@
+# ai/gemini_api.py
 import json
-import google.generativeai as genai
 import re
+import google.generativeai as genai
+from config import GEMINI_API_KEY
 
-def generate_flashcards_from_text(lecture_text, GEMINI_API_KEY):
-    """
-    Надсилає текст до Gemini та просить згенерувати Q/A пари.
-    Ця версія "вирізає" JSON з відповіді.
-    """
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
-    except Exception as e:
-        print(f"Помилка конфігурації Gemini: {e}")
-        return None
 
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+
+def _extract_json(raw_text: str):
+    """Допоміжна функція: вирізає JSON зі відповіді Gemini."""
+    match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+    if match:
+        return match.group(0)
+
+    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+    if match:
+        return match.group(0)
+
+    return None
+
+
+def generate_flashcards_from_text(lecture_text: str):
+    """Генерує нові картки з тексту."""
     prompt = f"""
-    Твоє завдання – створити флеш-картки з наданого тексту лекції.
-    Проаналізуй текст нижче і згенеруй на його основі 10-15 пар "питання-відповідь".
-
-    Вимоги до результату:
-    1. Поверни результат у форматі JSON-масиву.
-    2. Кожен об'єкт у масиві повинен мати два ключі: "question" та "answer".
-
-    Приклад формату:
+    Створи 10–15 флеш-карток у форматі JSON:
     [
-      {{"question": "Що таке фотосинтез?", "answer": "Процес перетворення світлової енергії на хімічну."}}
+      {{"question": "...", "answer": "..."}}
     ]
 
-    Ось текст лекції:
+    Ось текст:
     ---
     {lecture_text}
     ---
     """
 
-    try:
-        response = gemini_model.generate_content(prompt)
-        raw_text = response.text
+    response = model.generate_content(prompt)
+    json_raw = _extract_json(response.text)
 
-        # Потужний парсинг JSON (шукаємо текст між [ та ])
-        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-
-        json_text = ""
-        if match:
-            json_text = match.group(0)
-        else:
-            match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-            if match:
-                json_text = match.group(0)
-            else:
-                print(f"Помилка: Не вдалося знайти JSON у відповіді: {raw_text}")
-                return None
-
-        flashcards = json.loads(json_text)
-        print(json.dumps(flashcards, indent=2, ensure_ascii=False))
-
-
-        if isinstance(flashcards, list) and all(isinstance(item, dict) for item in flashcards):
-            return flashcards
-        elif isinstance(flashcards, dict):
-            return [flashcards]
-        else:
-            print(f"Помилка: Gemini повернув дивний JSON: {json_text}")
-            return None
-
-    except json.JSONDecodeError:
-        print(f"Помилка декодування JSON. Сира відповідь: {response.text}")
+    if not json_raw:
         return None
-    except Exception as e:
-        print(f"Виникла помилка API Gemini: {e}")
+
+    try:
+        result = json.loads(json_raw)
+        if isinstance(result, dict):
+            return [result]
+        return result
+    except json.JSONDecodeError:
+        return None
+
+
+def regenerate_flashcards(lecture_text: str):
+    """Перегенерація — така ж логіка, але з іншим промптом."""
+    prompt = f"""
+    Перегенеруй флеш-картки з цього ж тексту.
+    Структура:
+    [
+      {{"question": "...", "answer": "..."}}
+    ]
+
+    Текст:
+    ---
+    {lecture_text}
+    ---
+    """
+
+    response = model.generate_content(prompt)
+    json_raw = _extract_json(response.text)
+
+    if not json_raw:
+        return None
+
+    try:
+        result = json.loads(json_raw)
+        if isinstance(result, dict):
+            return [result]
+        return result
+    except json.JSONDecodeError:
         return None
