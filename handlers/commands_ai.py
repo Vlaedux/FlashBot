@@ -2,145 +2,134 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from ai.gemini_api import generate_flashcards_from_text, regenerate_flashcards, check_answer_gemini
-from database.db import save_flashcards
+from database.db import save_flashcards 
+from ai.gemini_api import generate_flashcards_from_text, regenerate_flashcards 
 
 router = Router()
 
-# --- Стани для Квізу ---
-class QuizFlow(StatesGroup):
-    waiting_for_text = State()       # Чекаємо лекцію
-    answering_question = State()     # Чекаємо відповідь на питання
-    waiting_for_theme_save = State() # Чекаємо назву для збереження
+# --- ОНОВЛЕНІ СТАНИ для процесу Генерації ---
+class GenerationFlow(StatesGroup):
+    waiting_for_text = State()          
+    cards_ready = State()               
+    waiting_for_theme_name = State()    # Стан для очікування назви теми
 
-# 1. Старт генерації
+# ------------------------------------
+# 1. /generate: Старт генерації
+# ------------------------------------
 @router.message(Command("generate"))
 async def cmd_generate(message: types.Message, state: FSMContext):
-    await message.answer("🔥 Надішліть текст лекції.")
-    await state.set_state(QuizFlow.waiting_for_text)
+    await message.answer("🔥 Надішліть текст лекції — я згенерую флеш-картки.")
+    await state.set_state(GenerationFlow.waiting_for_text)
 
-# 2. Обробка тексту лекції
-@router.message(QuizFlow.waiting_for_text)
+
+# ------------------------------------
+# 2. Обробка тексту лекції та Генерація
+# ------------------------------------
+@router.message(GenerationFlow.waiting_for_text)
 async def receive_lecture_text(message: types.Message, state: FSMContext):
-    await state.update_data(original_text=message.text)
+    lecture_text = message.text
     
-    wait_msg = await message.answer("⏳ Gemini 2.5 аналізує текст...")
+    await state.update_data(original_text=lecture_text) 
+    
+    wait_msg = await message.answer("⏳ Gemini 2.5 аналізує текст та генерує картки...")
 
-    # --- ВАЖЛИВО: Додано await ---
-    cards = await generate_flashcards_from_text(message.text)
+    cards = await generate_flashcards_from_text(lecture_text)
     
     await wait_msg.delete()
 
     if not cards:
-        return await message.answer("❌ Не вдалося створити картки. Перевірте доступ до моделі 2.5 або спробуйте інший текст.")
+        await state.clear()
+        return await message.answer("❌ Не вдалося створити картки. Спробуйте інший текст.")
 
-    # Зберігаємо картки і починаємо з індексу 0
-    await state.update_data(cards=cards, current_index=0, score=0)
+    await state.update_data(generated_cards=cards)
+    await display_cards_and_buttons(message, cards)
     
-    await message.answer(f"✅ Створено {len(cards)} питань! Починаємо тест.")
-    await ask_current_question(message, state)
+    await state.set_state(GenerationFlow.cards_ready)
 
-# Допоміжна функція: Задати питання
-async def ask_current_question(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    cards = data['cards']
-    index = data['current_index']
 
-    if index < len(cards):
-        question = cards[index]['question']
-        # Показуємо ТІЛЬКИ питання
-        await message.answer(f"📝 **Питання {index + 1}/{len(cards)}:**\n\n{question}", parse_mode="Markdown")
-        await state.set_state(QuizFlow.answering_question)
-    else:
-        await finish_quiz(message, state)
-
-# 3. Перевірка відповіді
-@router.message(QuizFlow.answering_question)
-async def handle_answer(message: types.Message, state: FSMContext):
-    user_answer = message.text
-    data = await state.get_data()
+# ------------------------------------
+# ДОПОМІЖНА ФУНКЦІЯ: Відображення карток та кнопок
+# ------------------------------------
+async def display_cards_and_buttons(message: types.Message, cards: list):
+    """Форматує та відображає згенеровані картки з кнопками."""
     
-    cards = data['cards']
-    index = data['current_index']
-    current_card = cards[index]
-    
-    msg = await message.answer("🤔 Перевіряю...")
+    card_list_text = "\n\n".join([
+        f"*{i}.*\n❓ *{c['question']}*\n✅ {c['answer']}"
+        for i, c in enumerate(cards, 1)
+    ])
 
-    # --- ВАЖЛИВО: Додано await для перевірки ---
-    result = await check_answer_gemini(current_card['question'], current_card['answer'], user_answer)
-    
-    await msg.delete()
-
-    status = result.get("status", "Невизначено")
-    feedback = result.get("feedback", "")
-    
-    if status == "Правильно":
-        new_score = data['score'] + 1
-        await state.update_data(score=new_score)
-        await message.answer(f"✅ **Правильно!**\n{feedback}", parse_mode="Markdown")
-    elif status == "Частково":
-        await message.answer(f"⚠️ **Майже правильно.**\n{feedback}\n\n📖 *Правильна відповідь:* {current_card['answer']}", parse_mode="Markdown")
-    else:
-        await message.answer(f"❌ **Неправильно.**\n{feedback}\n\n📖 *Правильна відповідь:* {current_card['answer']}", parse_mode="Markdown")
-
-    # Наступне питання
-    await state.update_data(current_index=index + 1)
-    await ask_current_question(message, state)
-
-# 4. Фініш і кнопки
-async def finish_quiz(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    score = data.get('score', 0)
-    total = len(data.get('cards', []))
-
-    keyboard = types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [types.InlineKeyboardButton(text="🔁 Перегенерувати (Gemini 2.5)", callback_data="regen")],
-            [types.InlineKeyboardButton(text="💾 Зберегти результат", callback_data="save")]
-        ]
-    )
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔄 Перегенерувати тему", callback_data="regen_cards")],
+        [types.InlineKeyboardButton(text="💾 Зберегти картки", callback_data="save_cards")]
+    ])
     
     await message.answer(
-        f"🏁 **Тест завершено!**\nТвій результат: {score} з {total}.",
+        f"✅ Згенеровано {len(cards)} карток!\n\n{card_list_text}",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
-# --- CALLBACKS ---
 
-@router.callback_query(lambda c: c.data == "regen")
-async def callback_regenerate(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    original_text = data.get('original_text')
-
-    if not original_text:
-        return await callback.answer("Текст втрачено.")
-
-    await callback.message.edit_text("🔄 Gemini 2.5 генерує нові питання...")
+# ------------------------------------
+# 3. CALLBACK: Зберегти картки (Ініціація очікування теми)
+# ------------------------------------
+@router.callback_query(F.data == "save_cards", GenerationFlow.cards_ready)
+async def callback_save_cards(callback: types.CallbackQuery, state: FSMContext):
     
-    # --- ВАЖЛИВО: Додано await ---
-    new_cards = await regenerate_flashcards(original_text)
+    # ⭐️ ВИПРАВЛЕННЯ: Надсилаємо НОВЕ повідомлення і прибираємо кнопки зі старого!
+    await callback.message.answer("📌 Введіть назву теми, під якою зберегти картки:")
+    await callback.message.edit_reply_markup(reply_markup=None) 
     
-    if not new_cards:
-        return await callback.message.answer("Помилка генерації.")
-
-    await state.update_data(cards=new_cards, current_index=0, score=0)
-    await ask_current_question(callback.message, state)
-
-@router.callback_query(lambda c: c.data == "save")
-async def callback_save(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📌 Введіть назву теми для збереження:")
-    await state.set_state(QuizFlow.waiting_for_theme_save)
+    await state.set_state(GenerationFlow.waiting_for_theme_name)
     await callback.answer()
 
-@router.message(QuizFlow.waiting_for_theme_save)
+
+# ------------------------------------
+# 4. ОБРОБНИК: Збереження (Реагує тільки на НОВИЙ СТАН)
+# ------------------------------------
+@router.message(GenerationFlow.waiting_for_theme_name)
 async def save_handler(message: types.Message, state: FSMContext):
-    theme = message.text
-    data = await state.get_data()
-    cards = data.get('cards')
     
-    if cards:
-        save_flashcards(message.from_user.id, cards, theme)
-        await message.answer(f"💾 Збережено: *{theme}*", parse_mode="Markdown")
+    data = await state.get_data()
+    cards = data.get('generated_cards')
+    
+    if not cards:
+        await state.clear()
+        return await message.answer("Помилка: Картки для збереження не знайдено.")
+
+    theme = message.text.strip()
+    
+    save_flashcards(message.from_user.id, cards, theme)
+    
+    await message.answer(f"💾 Картки успішно збережено під темою: *{theme}*.\n\n"
+                         "Ви можете розпочати тренування командою /quiz.", 
+                         parse_mode="Markdown")
     
     await state.clear()
+
+
+# ------------------------------------
+# 5. CALLBACK: Перегенерувати тему 
+# ------------------------------------
+@router.callback_query(F.data == "regen_cards", GenerationFlow.cards_ready)
+async def regenerate_handler(callback: types.CallbackQuery, state: FSMContext):
+    
+    data = await state.get_data()
+    lecture_text = data.get('original_text')
+    
+    if not lecture_text:
+        await callback.answer("Текст лекції втрачено.")
+        return
+
+    await callback.message.edit_text("🔄 Gemini 2.5 генерує нову версію карток...")
+
+    new_cards = await regenerate_flashcards(lecture_text)
+
+    if not new_cards:
+        await callback.message.edit_text("❌ Помилка перегенерації.")
+        return
+
+    await state.update_data(generated_cards=new_cards)
+    
+    await display_cards_and_buttons(callback.message, new_cards)
+    await callback.answer("Картки оновлено!")

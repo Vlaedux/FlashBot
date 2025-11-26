@@ -5,19 +5,17 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent / "flashbot.db"
 
 
-# --- Migrations (додає поле theme, якщо його нема) ---
 def migrate_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
         cur.execute("ALTER TABLE flashcards ADD COLUMN theme TEXT DEFAULT 'Без теми';")
     except sqlite3.OperationalError:
-        pass  # поле вже існує
+        pass
     conn.commit()
     conn.close()
 
 
-# --- 1. Ініціалізація БД ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -31,6 +29,18 @@ def init_db():
             theme TEXT DEFAULT 'Без теми'
         );
     """)
+    
+    # Таблиця training_stats (для статистики квізу)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS training_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            theme TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            total_cards INTEGER NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
 
     conn.commit()
     conn.close()
@@ -38,7 +48,6 @@ def init_db():
     migrate_db()
 
 
-# --- 2. Збереження карток під тему ---
 def save_flashcards(user_id: int, cards: list, theme: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -52,8 +61,19 @@ def save_flashcards(user_id: int, cards: list, theme: str):
     conn.commit()
     conn.close()
 
+def save_training_result(user_id: int, theme: str, score: int, total_cards: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
 
-# --- 3. Отримати список тем ---
+    cur.execute(
+        "INSERT INTO training_stats (user_id, theme, score, total_cards) VALUES (?, ?, ?, ?)",
+        (user_id, theme, score, total_cards)
+    )
+
+    conn.commit()
+    conn.close()
+
+
 def get_user_themes(user_id: int):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -68,27 +88,41 @@ def get_user_themes(user_id: int):
     return [row[0] for row in rows]
 
 
-# --- 4. Отримати картки по темі ---
 def get_cards_by_theme(user_id: int, theme: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
+    # Отримуємо ID, question, answer
     cur.execute(
-        "SELECT question, answer FROM flashcards WHERE user_id = ? AND theme = ?",
+        "SELECT id, question, answer FROM flashcards WHERE user_id = ? AND theme = ?",
         (user_id, theme)
     )
     rows = cur.fetchall()
     conn.close()
 
-    return [{"question": q, "answer": a} for q, a in rows]
+    return [{"id": c_id, "question": q, "answer": a} for c_id, q, a in rows]
 
 
-# --- 5. Видалити картки по темі (опціонально) ---
-def clear_theme(user_id: int, theme: str):
+def update_card(card_id: int, question: str, answer: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    cur.execute(
+        "UPDATE flashcards SET question = ?, answer = ? WHERE id = ?",
+        (question, answer, card_id)
+    )
+    conn.commit()
+    conn.close()
 
+def delete_card(card_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM flashcards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+
+def delete_theme(user_id: int, theme: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
     cur.execute("DELETE FROM flashcards WHERE user_id = ? AND theme = ?", (user_id, theme))
-
     conn.commit()
     conn.close()

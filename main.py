@@ -2,7 +2,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from config import BOT_TOKEN
 
-from handlers import commands_basic, commands_ai, commands_train, commands_quiz, commands_ask
+from handlers import commands_basic, commands_ai, commands_quiz, commands_ask
 from database.db import init_db
 
 async def main():
@@ -14,7 +14,6 @@ async def main():
 
     dp.include_router(commands_basic.router)
     dp.include_router(commands_ai.router)
-    dp.include_router(commands_train.router)
     dp.include_router(commands_quiz.router)
     dp.include_router(commands_ask.router)
 
