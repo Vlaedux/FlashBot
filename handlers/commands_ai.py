@@ -7,6 +7,14 @@ from ai.gemini_api import generate_flashcards_from_text, regenerate_flashcards
 
 router = Router()
 
+# handlers/commands_ai.py
+
+@router.message(Command("generate"))
+@router.message(F.text == "💡 Створити картки") # Додаємо реакцію на кнопку
+async def cmd_generate(message: types.Message, state: FSMContext):
+    await message.answer("🔥 Надішліть текст лекції — я згенерую флеш-картки.")
+    await state.set_state(GenerationFlow.waiting_for_text)
+
 # --- ОНОВЛЕНІ СТАНИ для процесу Генерації ---
 class GenerationFlow(StatesGroup):
     waiting_for_text = State()          
@@ -102,8 +110,8 @@ async def save_handler(message: types.Message, state: FSMContext):
     save_flashcards(message.from_user.id, cards, theme)
     
     await message.answer(f"💾 Картки успішно збережено під темою: *{theme}*.\n\n"
-                         "Ви можете розпочати тренування командою /quiz.", 
-                         parse_mode="Markdown")
+                     "Ви можете переглянути їх за допомогою меню 'Мої картки'.", 
+                     parse_mode="Markdown")
     
     await state.clear()
 

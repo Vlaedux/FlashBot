@@ -23,9 +23,6 @@ def build_keyboard_view(current_page: int, total_pages: int, theme: str, card_id
             InlineKeyboardButton(text="📖 Показати відповідь", callback_data=f"show_answer:{theme}:{current_page}")
         )
     
-    action_buttons.append(
-        InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"edit_card:{card_id}")
-    )
     # Додаємо card_id, theme, current_page для повернення після видалення
     action_buttons.append(
         InlineKeyboardButton(text="❌ Видалити", callback_data=f"delete_card_conf:{card_id}:{theme}:{current_page}") 

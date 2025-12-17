@@ -1,14 +1,23 @@
 # handlers/commands_basic.py
 from aiogram import F, Router, types
 from aiogram.filters import Command
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from database.db import get_user_themes, get_cards_by_theme, delete_card, delete_theme
 from utils.pagination import paginate_list, build_keyboard_view 
 
 router = Router()
 
+# --- ГОЛОВНЕ МЕНЮ (Дев 2) ---
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💡 Створити картки"), KeyboardButton(text="🧠 Тренування")],
+        [KeyboardButton(text="💾 Мої картки"), KeyboardButton(text="❓ Запитати")]
+    ],
+    resize_keyboard=True
+)
 
 # -------------------------
-# /start та /help (Ваші існуючі хендлери залишаються)
+# /start та /help (Збережено твій текст)
 # -------------------------
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -16,8 +25,8 @@ async def cmd_start(message: types.Message):
         "👋 Привіт! Я — FlashBot.\n\n"
         "Моя мета — допомогти тобі вчитись ефективніше.\n"
         "Я можу перетворювати текст лекцій у флеш-картки для самоперевірки.\n\n"
-        "🧠 Просто скористайся командою /generate, щоб надіслати текст лекції.\n\n"
-        "ℹ️ Щоб дізнатись про всі доступні команди — напиши /help."
+        "🧠 Просто скористайся командою /generate або кнопками нижче 👇",
+        reply_markup=main_menu
     )
 
 @router.message(Command("help"))
@@ -33,8 +42,14 @@ async def cmd_help(message: types.Message):
         parse_mode="Markdown"
     )
 
+# Додана обробка текстових кнопок меню
+@router.message(F.text == "💾 Мої картки")
+async def btn_mycards_text(message: types.Message):
+    await cmd_mycards(message)
+
 # -------------------------
 # /mycards (Py Dev 1: вибір теми)
+# Додана функція видалення тем (Дев 3)
 # -------------------------
 @router.message(Command("mycards"))
 async def cmd_mycards(message: types.Message):
@@ -44,27 +59,38 @@ async def cmd_mycards(message: types.Message):
     if not themes:
         return await message.answer("📭 У вас поки немає збережених карток.")
 
+    # Оновлена клавіатура: Перегляд + Видалення теми
     keyboard = types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text=theme, callback_data=f"view_theme:{theme}:1")]
-            for theme in themes
+            [
+                types.InlineKeyboardButton(text=f"📖 {theme}", callback_data=f"view_theme:{theme}:1"),
+                types.InlineKeyboardButton(text="🗑 Видалити тему", callback_data=f"conf_del_theme:{theme}")
+            ] for theme in themes
         ]
     )
 
     await message.answer(
-        "📚 *Ваші теми карток*\n\nОберіть тему для перегляду:",
+        "📚 *Ваші теми карток*\n\nОберіть тему для перегляду або видалення:",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
+# Хендлер видалення всієї теми (Дев 3)
+@router.callback_query(F.data.startswith("conf_del_theme:"))
+async def confirm_delete_theme_handler(callback: types.CallbackQuery):
+    theme = callback.data.split(":")[1]
+    delete_theme(callback.from_user.id, theme)
+    await callback.message.edit_text(f"✅ Тему *{theme}* та всі її картки успішно видалено.", parse_mode="Markdown")
+    await callback.answer()
 
 # -------------------------
-# CALLBACK: Перегляд першої сторінки теми (Py Dev 1)
+# CALLBACK: Твій оригінальний код пагінації залишається БЕЗ ЗМІН
 # -------------------------
 @router.callback_query(F.data.startswith("view_theme:"))
 async def open_theme_view(callback: types.CallbackQuery):
-    _, theme, page = callback.data.split(":")
-    page = int(page)
+    # Виправлено розпаковку для уникнення ValueError
+    parts = callback.data.split(":")
+    theme, page = parts[1], int(parts[2])
     user_id = callback.from_user.id
 
     cards = get_cards_by_theme(user_id, theme)
@@ -88,14 +114,10 @@ async def open_theme_view(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-
-# -------------------------
-# CALLBACK: Пагінація (Гортання) (Py Dev 1)
-# -------------------------
 @router.callback_query(F.data.startswith("view_page:"))
 async def card_pagination(callback: types.CallbackQuery):
-    _, theme, page = callback.data.split(":")
-    page = int(page)
+    parts = callback.data.split(":")
+    theme, page = parts[1], int(parts[2])
     user_id = callback.from_user.id
 
     cards = get_cards_by_theme(user_id, theme)
@@ -115,14 +137,10 @@ async def card_pagination(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-
-# -------------------------
-# CALLBACK: Показати відповідь (Py Dev 1)
-# -------------------------
 @router.callback_query(F.data.startswith("show_answer:"))
 async def show_card_answer(callback: types.CallbackQuery):
-    _, theme, page = callback.data.split(":")
-    page = int(page)
+    parts = callback.data.split(":")
+    theme, page = parts[1], int(parts[2])
     user_id = callback.from_user.id
 
     cards = get_cards_by_theme(user_id, theme)
@@ -140,19 +158,14 @@ async def show_card_answer(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
     await callback.answer()
 
-
-# ----------------------------------------
-# CALLBACK: Управління (Видалення)
-# ----------------------------------------
-
 @router.callback_query(F.data.startswith("delete_card_conf:"))
 async def confirm_delete_card_handler(callback: types.CallbackQuery):
-    _, card_id_str, theme, page_str = callback.data.split(":")
-    card_id = int(card_id_str)
+    parts = callback.data.split(":")
+    card_id = int(parts[1])
+    theme = parts[2]
     
-    delete_card(card_id) # Викликаємо функцію з db.py
+    delete_card(card_id)
 
-    # Перевіряємо, чи залишилися картки у темі, інакше повертаємося до /mycards
     cards = get_cards_by_theme(callback.from_user.id, theme)
 
     if not cards:
@@ -161,12 +174,9 @@ async def confirm_delete_card_handler(callback: types.CallbackQuery):
         )
         return await callback.answer("Картку видалено.")
 
-    # Логіка оновлення після видалення
-    # Викликаємо функцію пагінації знову, щоб оновити UI
     await callback.answer("Картку видалено. Оновлення сторінки...")
     await card_pagination(callback)
     
-# Хендлер для редагування (поки що заглушка)
 @router.callback_query(F.data.startswith("edit_card:"))
 async def edit_card_start_handler(callback: types.CallbackQuery):
     await callback.answer("✏️ Редагування: Функція буде реалізована у наступних спринтах.")

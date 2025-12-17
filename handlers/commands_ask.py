@@ -1,8 +1,16 @@
-﻿from aiogram import Router, types
+﻿from aiogram import Router, types, F
 from aiogram.filters import Command
 from ai.gemini_api import ask_gemini
 
 router = Router()
+
+# handlers/commands_ask.py
+
+@router.message(Command("ask"))
+@router.message(F.text == "❓ Запитати") # Додаємо реакцію на кнопку
+async def cmd_ask(message: types.Message):
+    user_waiting_question[message.from_user.id] = True
+    await message.answer("❓ Надішліть ваше питання, і я дам відповідь.")
 
 # Словник для відстеження стану: чи чекаємо ми питання від користувача
 user_waiting_question = {} 
@@ -30,8 +38,8 @@ async def receive_question(message: types.Message):
 
     await wait_msg.delete()
 
-    # Виводимо відповідь без Markdown, щоб не було помилок форматування
     await message.answer(
-        f"💬 Ваше питання:\n{question}\n\n"
-        f"🤖 Відповідь:\n{answer}"
+        f"💬 **Ваше питання:**\n{question}\n\n"
+        f"🤖 **Відповідь:**\n{answer}",
+        parse_mode="Markdown" 
     )
